@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -28,10 +29,73 @@ type Resp struct {
 	Error   string `json:"error,omitempty"`
 }
 
+type ipRange struct {
+	start net.IP
+	end   net.IP
+}
+
+var privateRanges = []ipRange{
+	ipRange{
+		start: net.ParseIP("10.0.0.0"),
+		end:   net.ParseIP("10.255.255.255"),
+	},
+	ipRange{
+		start: net.ParseIP("100.64.0.0"),
+		end:   net.ParseIP("100.127.255.255"),
+	},
+	ipRange{
+		start: net.ParseIP("172.16.0.0"),
+		end:   net.ParseIP("172.31.255.255"),
+	},
+	ipRange{
+		start: net.ParseIP("192.0.0.0"),
+		end:   net.ParseIP("192.0.0.255"),
+	},
+	ipRange{
+		start: net.ParseIP("192.168.0.0"),
+		end:   net.ParseIP("192.168.255.255"),
+	},
+	ipRange{
+		start: net.ParseIP("198.18.0.0"),
+		end:   net.ParseIP("198.19.255.255"),
+	},
+}
+
+func inRange(r ipRange, ipAddress net.IP) bool {
+	if bytes.Compare(ipAddress, r.start) >= 0 && bytes.Compare(ipAddress, r.end) < 0 {
+		return true
+	}
+	return false
+}
+
+func isPrivateSubnet(ipAddress net.IP) bool {
+	if ipCheck := ipAddress.To4(); ipCheck != nil {
+		for _, r := range privateRanges {
+			if inRange(r, ipAddress) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func getClientIP(r *http.Request) net.IP {
+	for _, h := range []string{"X-Real-Ip", "X-Client-Ip", "X-Forwarded-For"} {
+		for _, ipStr := range strings.Split(r.Header.Get(h), ",") {
+			ipStr = strings.TrimSpace(ipStr)
+			ip := net.ParseIP(ipStr)
+			if ip.IsGlobalUnicast() && !isPrivateSubnet(ip) {
+				return ip
+			}
+		}
+	}
+	return net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
+}
+
 func checkPort(r *http.Request) (int, *Resp, error) {
 	resp := &Resp{Success: false}
 
-	clientIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
+	clientIP := getClientIP(r)
 	if clientIP == nil {
 		resp.Error = fmt.Sprintf("failed to parse client IP address")
 		return http.StatusBadRequest, resp, fmt.Errorf("failed to parse client IP address from %s", r.RemoteAddr)
